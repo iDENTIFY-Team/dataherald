@@ -1,10 +1,10 @@
 import os
 from abc import ABC, abstractmethod
-from typing import Any, List
+from typing import List, Tuple
 
 from dataherald.config import Component, System
 from dataherald.db import DB
-from dataherald.types import GoldenRecord, GoldenRecordRequest, NLQuery
+from dataherald.types import GoldenRecord, GoldenRecordRequest, Question
 from dataherald.vector_store import VectorStore
 
 
@@ -24,8 +24,8 @@ class ContextStore(Component, ABC):
 
     @abstractmethod
     def retrieve_context_for_question(
-        self, nl_question: NLQuery, number_of_samples: int = 3
-    ) -> List[dict] | None:
+        self, nl_question: Question, number_of_samples: int = 3
+    ) -> Tuple[List[dict] | None, List[dict] | None]:
         pass
 
     @abstractmethod

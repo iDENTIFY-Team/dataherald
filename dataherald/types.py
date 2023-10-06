@@ -1,5 +1,5 @@
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
 
 from bson.errors import InvalidId
 from bson.objectid import ObjectId
@@ -20,12 +20,8 @@ class DBConnectionValidation(BaseModel):
         return v
 
 
-class UpdateQueryRequest(BaseModel):
-    sql_query: str
-
-
-class ExecuteTempQueryRequest(BaseModel):
-    query_id: str
+class CreateResponseRequest(BaseModel):
+    question_id: str
     sql_query: str
 
 
@@ -34,9 +30,23 @@ class SQLQueryResult(BaseModel):
     rows: list[dict]
 
 
-class NLQuery(BaseModel):
-    id: Any
+class Question(BaseModel):
+    id: str | None = None
     question: str
+    db_connection_id: str
+
+
+class UpdateInstruction(BaseModel):
+    instruction: str
+
+
+class InstructionRequest(DBConnectionValidation):
+    instruction: str
+
+
+class Instruction(BaseModel):
+    id: str | None = None
+    instruction: str
     db_connection_id: str
 
 
@@ -46,7 +56,7 @@ class GoldenRecordRequest(DBConnectionValidation):
 
 
 class GoldenRecord(BaseModel):
-    id: Any
+    id: str | None = None
     question: str
     sql_query: str
     db_connection_id: str
@@ -58,10 +68,10 @@ class SQLGenerationStatus(Enum):
     INVALID = "INVALID"
 
 
-class NLQueryResponse(BaseModel):
-    id: Any
-    nl_question_id: Any
-    nl_response: str | None = None
+class Response(BaseModel):
+    id: str | None = None
+    question_id: str | None = None
+    response: str | None = None
     intermediate_steps: list[str] | None = None
     sql_query: str
     sql_query_result: SQLQueryResult | None
@@ -71,7 +81,17 @@ class NLQueryResponse(BaseModel):
     total_tokens: int | None = None
     total_cost: float | None = None
     confidence_score: float | None = None
-    # date_entered: datetime = datetime.now() add this later
+    created_at: datetime = datetime.now()
+
+    @validator("created_at", pre=True)
+    def parse_datetime_with_timezone(cls, value):
+        if not value:
+            return None
+        return value.replace(tzinfo=timezone.utc)  # Set the timezone to UTC
+
+    @validator("question_id", pre=True)
+    def parse_question_id(cls, value):
+        return str(value)
 
 
 class SupportedDatabase(Enum):

@@ -10,10 +10,10 @@ from sqlalchemy.sql import func
 from dataherald.db_scanner import Scanner
 from dataherald.db_scanner.models.types import (
     ColumnDetail,
+    TableDescription,
     TableDescriptionStatus,
-    TableSchemaDetail,
 )
-from dataherald.db_scanner.repository.base import DBScannerRepository
+from dataherald.db_scanner.repository.base import TableDescriptionRepository
 from dataherald.sql_database.base import SQLDatabase
 
 MIN_CATEGORY_VALUE = 1
@@ -22,6 +22,30 @@ MAX_SIZE_LETTERS = 50
 
 
 class SqlAlchemyScanner(Scanner):
+    @override
+    def synchronizing(
+        self,
+        tables: list[str],
+        db_connection_id: str,
+        repository: TableDescriptionRepository,
+    ) -> None:
+        # persist tables to be scanned
+        for table in tables:
+            repository.save_table_info(
+                TableDescription(
+                    db_connection_id=db_connection_id,
+                    table_name=table,
+                    status=TableDescriptionStatus.SYNCHRONIZING.value,
+                )
+            )
+
+    @override
+    def get_all_tables_and_views(self, database: SQLDatabase) -> list[str]:
+        inspector = inspect(database.engine)
+        meta = MetaData(bind=database.engine)
+        MetaData.reflect(meta, views=True)
+        return inspector.get_table_names() + inspector.get_view_names()
+
     def get_table_examples(
         self, meta: MetaData, db_engine: SQLDatabase, table: str, rows_number: int = 3
     ) -> List[Any]:
@@ -123,8 +147,8 @@ class SqlAlchemyScanner(Scanner):
         table: str,
         db_engine: SQLDatabase,
         db_connection_id: str,
-        repository: DBScannerRepository,
-    ) -> TableSchemaDetail:
+        repository: TableDescriptionRepository,
+    ) -> TableDescription:
         print(f"Scanning table: {table}")
         inspector = inspect(db_engine.engine)
         table_columns = []
@@ -139,7 +163,7 @@ class SqlAlchemyScanner(Scanner):
                 )
             )
 
-        object = TableSchemaDetail(
+        object = TableDescription(
             db_connection_id=db_connection_id,
             table_name=table,
             columns=table_columns,
@@ -150,7 +174,7 @@ class SqlAlchemyScanner(Scanner):
                 meta=meta, db_engine=db_engine, table=table, rows_number=3
             ),
             last_schema_sync=datetime.now(),
-            status="SYNCHRONIZED",
+            status=TableDescriptionStatus.SYNCHRONIZED.value,
         )
 
         repository.save_table_info(object)
@@ -162,7 +186,7 @@ class SqlAlchemyScanner(Scanner):
         db_engine: SQLDatabase,
         db_connection_id: str,
         table_names: list[str] | None,
-        repository: DBScannerRepository,
+        repository: TableDescriptionRepository,
     ) -> None:
         inspector = inspect(db_engine.engine)
         meta = MetaData(bind=db_engine.engine)
@@ -176,16 +200,6 @@ class SqlAlchemyScanner(Scanner):
         if len(tables) == 0:
             raise ValueError("No table found")
 
-        # persist tables to be scanned
-        for table in tables:
-            repository.save_table_info(
-                TableSchemaDetail(
-                    db_connection_id=db_connection_id,
-                    table_name=table,
-                    status=TableDescriptionStatus.SYNCHRONIZING.value,
-                )
-            )
-
         for table in tables:
             try:
                 self.scan_single_table(
@@ -197,7 +211,7 @@ class SqlAlchemyScanner(Scanner):
                 )
             except Exception as e:
                 repository.save_table_info(
-                    TableSchemaDetail(
+                    TableDescription(
                         db_connection_id=db_connection_id,
                         table_name=table,
                         status=TableDescriptionStatus.FAILED.value,

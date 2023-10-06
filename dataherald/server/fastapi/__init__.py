@@ -9,18 +9,21 @@ from fastapi.routing import APIRoute
 import dataherald
 from dataherald.api.types import Query
 from dataherald.config import Settings
-from dataherald.db_scanner.models.types import TableSchemaDetail
+from dataherald.db_scanner.models.types import TableDescription
 from dataherald.sql_database.models.types import DatabaseConnection, SSHSettings
 from dataherald.types import (
+    CreateResponseRequest,
     DatabaseConnectionRequest,
-    ExecuteTempQueryRequest,
     GoldenRecord,
     GoldenRecordRequest,
-    NLQueryResponse,
+    Instruction,
+    InstructionRequest,
+    Question,
     QuestionRequest,
+    Response,
     ScannerRequest,
     TableDescriptionRequest,
-    UpdateQueryRequest,
+    UpdateInstruction,
 )
 
 
@@ -86,6 +89,13 @@ class FastAPI(dataherald.server.Server):
         )
 
         self.router.add_api_route(
+            "/api/v1/table-descriptions/{table_description_id}",
+            self.get_table_description,
+            methods=["GET"],
+            tags=["Table descriptions"],
+        )
+
+        self.router.add_api_route(
             "/api/v1/golden-records/{golden_record_id}",
             self.delete_golden_record,
             methods=["DELETE"],
@@ -107,24 +117,45 @@ class FastAPI(dataherald.server.Server):
         )
 
         self.router.add_api_route(
-            "/api/v1/question",
+            "/api/v1/questions",
             self.answer_question,
             methods=["POST"],
-            tags=["Question"],
+            tags=["Questions"],
         )
 
         self.router.add_api_route(
-            "/api/v1/nl-query-responses",
-            self.get_nl_query_response,
+            "/api/v1/questions",
+            self.get_questions,
+            methods=["GET"],
+            tags=["Questions"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/questions/{question_id}",
+            self.get_question,
+            methods=["GET"],
+            tags=["Questions"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/responses",
+            self.create_response,
             methods=["POST"],
-            tags=["NL query responses"],
+            tags=["Responses"],
         )
 
         self.router.add_api_route(
-            "/api/v1/nl-query-responses/{query_id}",
-            self.update_nl_query_response,
-            methods=["PATCH"],
-            tags=["NL query responses"],
+            "/api/v1/responses",
+            self.get_responses,
+            methods=["GET"],
+            tags=["Responses"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/responses/{response_id}",
+            self.get_response,
+            methods=["GET"],
+            tags=["Responses"],
         )
 
         self.router.add_api_route(
@@ -132,6 +163,34 @@ class FastAPI(dataherald.server.Server):
             self.execute_sql_query,
             methods=["POST"],
             tags=["SQL queries"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/instructions",
+            self.add_instruction,
+            methods=["POST"],
+            tags=["Instructions"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/instructions",
+            self.get_instructions,
+            methods=["GET"],
+            tags=["Instructions"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/instructions/{instruction_id}",
+            self.delete_instruction,
+            methods=["DELETE"],
+            tags=["Instructions"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/instructions/{instruction_id}",
+            self.update_instruction,
+            methods=["PUT"],
+            tags=["Instructions"],
         )
 
         self.router.add_api_route(
@@ -149,8 +208,15 @@ class FastAPI(dataherald.server.Server):
     ) -> bool:
         return self._api.scan_db(scanner_request, background_tasks)
 
-    def answer_question(self, question_request: QuestionRequest) -> NLQueryResponse:
+    def answer_question(self, question_request: QuestionRequest) -> Response:
         return self._api.answer_question(question_request)
+
+    def get_questions(self, db_connection_id: str | None = None) -> list[Question]:
+        return self._api.get_questions(db_connection_id)
+
+    def get_question(self, question_id: str) -> Question:
+        """Get a question"""
+        return self._api.get_question(question_id)
 
     def root(self) -> dict[str, int]:
         return {"nanosecond heartbeat": self._api.heartbeat()}
@@ -182,33 +248,37 @@ class FastAPI(dataherald.server.Server):
         self,
         table_description_id: str,
         table_description_request: TableDescriptionRequest,
-    ) -> TableSchemaDetail:
+    ) -> TableDescription:
         """Add descriptions for tables and columns"""
         return self._api.update_table_description(
             table_description_id, table_description_request
         )
 
     def list_table_descriptions(
-        self, db_connection_id: str | None = None, table_name: str | None = None
-    ) -> list[TableSchemaDetail]:
+        self, db_connection_id: str, table_name: str | None = None
+    ) -> list[TableDescription]:
         """List table descriptions"""
         return self._api.list_table_descriptions(db_connection_id, table_name)
+
+    def get_table_description(self, table_description_id: str) -> TableDescription:
+        """Get description"""
+        return self._api.get_table_description(table_description_id)
+
+    def get_responses(self, question_id: str | None = None) -> list[Response]:
+        """List responses"""
+        return self._api.get_responses(question_id)
+
+    def get_response(self, response_id: str) -> Response:
+        """Get a response"""
+        return self._api.get_response(response_id)
 
     def execute_sql_query(self, query: Query) -> tuple[str, dict]:
         """Executes a query on the given db_connection_id"""
         return self._api.execute_sql_query(query)
 
-    def update_nl_query_response(
-        self, query_id: str, query: UpdateQueryRequest
-    ) -> NLQueryResponse:
+    def create_response(self, query_request: CreateResponseRequest) -> Response:
         """Executes a query on the given db_connection_id"""
-        return self._api.update_nl_query_response(query_id, query)
-
-    def get_nl_query_response(
-        self, query_request: ExecuteTempQueryRequest
-    ) -> NLQueryResponse:
-        """Executes a query on the given db_connection_id"""
-        return self._api.get_nl_query_response(query_request)
+        return self._api.create_response(query_request)
 
     def delete_golden_record(self, golden_record_id: str) -> dict:
         """Deletes a golden record"""
@@ -226,6 +296,37 @@ class FastAPI(dataherald.server.Server):
             content=golden_records_as_dicts, status_code=status.HTTP_201_CREATED
         )
 
-    def get_golden_records(self, page: int = 1, limit: int = 10) -> List[GoldenRecord]:
+    def get_golden_records(
+        self, db_connection_id: str = None, page: int = 1, limit: int = 10
+    ) -> List[GoldenRecord]:
         """Gets golden records"""
-        return self._api.get_golden_records(page, limit)
+        return self._api.get_golden_records(db_connection_id, page, limit)
+
+    def add_instruction(self, instruction_request: InstructionRequest) -> Instruction:
+        """Adds an instruction"""
+        created_records = self._api.add_instruction(instruction_request)
+
+        # Return a JSONResponse with status code 201 and the location header.
+        instruction_as_dict = created_records.dict()
+
+        return JSONResponse(
+            content=instruction_as_dict, status_code=status.HTTP_201_CREATED
+        )
+
+    def get_instructions(
+        self, db_connection_id: str = None, page: int = 1, limit: int = 10
+    ) -> List[Instruction]:
+        """Gets instructions"""
+        return self._api.get_instructions(db_connection_id, page, limit)
+
+    def delete_instruction(self, instruction_id: str) -> dict:
+        """Deletes an instruction"""
+        return self._api.delete_instruction(instruction_id)
+
+    def update_instruction(
+        self,
+        instruction_id: str,
+        instruction_request: UpdateInstruction,
+    ) -> Instruction:
+        """Updates an instruction"""
+        return self._api.update_instruction(instruction_id, instruction_request)

@@ -1,15 +1,15 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import text
 
 from dataherald.sql_database.base import SQLDatabase, SQLInjectionError
-from dataherald.types import NLQueryResponse, SQLQueryResult
+from dataherald.types import Response, SQLQueryResult
 
 
 def create_sql_query_status(
-    db: SQLDatabase, query: str, response: NLQueryResponse
-) -> NLQueryResponse:
+    db: SQLDatabase, query: str, response: Response
+) -> Response:
     """Find the sql query status and populate the fields sql_query_result, sql_generation_status, and error_message"""
     if query == "":
         response.sql_generation_status = "NONE"
@@ -30,9 +30,10 @@ def create_sql_query_status(
                 for row in result:
                     modified_row = {}
                     for key, value in zip(row.keys(), row, strict=True):
-                        if (
-                            type(value) is date
-                        ):  # Check if the value is an instance of datetime.date
+                        if type(value) in [
+                            date,
+                            datetime,
+                        ]:  # Check if the value is an instance of datetime.date
                             modified_row[key] = str(value)
                         elif (
                             type(value) is Decimal

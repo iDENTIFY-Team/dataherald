@@ -17,6 +17,12 @@ class DB(Component, ABC):
         pass
 
     @abstractmethod
+    def rename_field(
+        self, collection_name: str, old_field_name: str, new_field_name: str
+    ) -> None:
+        pass
+
+    @abstractmethod
     def update_or_create(self, collection: str, query: dict, obj: dict) -> int:
         pass
 
@@ -29,11 +35,18 @@ class DB(Component, ABC):
         pass
 
     @abstractmethod
-    def find(self, collection: str, query: dict, sort: list = None) -> list:
+    def find(
+        self,
+        collection: str,
+        query: dict,
+        sort: list = None,
+        page: int = 0,
+        limit: int = 0,
+    ) -> list:
         pass
 
     @abstractmethod
-    def find_all(self, collection: str) -> list:
+    def find_all(self, collection: str, page: int = 0, limit: int = 0) -> list:
         pass
 
     @abstractmethod
