@@ -1,7 +1,12 @@
 import os
+os.environ["OPENAI_API_TYPE"] = "azure"
+os.environ["OPENAI_API_VERSION"] = "2023-05-15"
+os.environ["OPENAI_API_BASE"] = "https://testopenaiaerovision.openai.azure.com/"
+os.environ["OPENAI_API_KEY"] = "9fb24ce358204ea78dc0b3ef4e2e7e38"
+
 from typing import Any
 
-from langchain.chat_models import ChatAnthropic, ChatGooglePalm, ChatOpenAI
+from langchain.chat_models import ChatAnthropic, ChatGooglePalm, AzureChatOpenAI
 from overrides import override
 
 from dataherald.model import LLMModel
@@ -36,8 +41,11 @@ class ChatModel(LLMModel):
             elif model_family == "google":
                 self.google_api_key = api_key
         if self.openai_api_key:
-            self.model = ChatOpenAI(
-                model_name=self.model_name, openai_api_key=self.openai_api_key, **kwargs
+            self.model = AzureChatOpenAI(
+                deployment_name='id-ai-gpt4',
+                model_name=self.model_name, 
+                openai_api_key=self.openai_api_key,
+                **kwargs
             )
         elif self.anthropic_api_key:
             self.model = ChatAnthropic(

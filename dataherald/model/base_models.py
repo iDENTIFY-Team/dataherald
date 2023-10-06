@@ -1,7 +1,12 @@
 import os
+os.environ["OPENAI_API_TYPE"] = "azure"
+os.environ["OPENAI_API_VERSION"] = "2023-05-15"
+os.environ["OPENAI_API_BASE"] = "https://testopenaiaerovision.openai.azure.com/"
+os.environ["OPENAI_API_KEY"] = "9fb24ce358204ea78dc0b3ef4e2e7e38"
+
 from typing import Any
 
-from langchain.llms import AlephAlpha, Anthropic, Cohere, OpenAI
+from langchain.llms import AlephAlpha, Anthropic, Cohere, AzureOpenAI
 from overrides import override
 
 from dataherald.model import LLMModel
@@ -37,7 +42,7 @@ class BaseModel(LLMModel):
             elif model_family == "google":
                 self.google_api_key = api_key
         if self.openai_api_key:
-            self.model = OpenAI(model_name=self.model_name, **kwargs)
+            self.model = AzureOpenAI(deployment_name='id-ai-gpt4', model_name=self.model_name, **kwargs)
         elif self.aleph_alpha_api_key:
             self.model = AlephAlpha(model=self.model_name, **kwargs)
         elif self.anthropic_api_key:
