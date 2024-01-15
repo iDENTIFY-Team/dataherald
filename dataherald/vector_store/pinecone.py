@@ -1,6 +1,5 @@
-import os
 from typing import Any, List
-
+import os
 import pinecone
 from langchain.embeddings import OpenAIEmbeddings
 from overrides import override
@@ -10,7 +9,7 @@ from dataherald.db import DB
 from dataherald.repositories.database_connections import DatabaseConnectionRepository
 from dataherald.vector_store import VectorStore
 
-EMBEDDING_MODEL = "text-embedding-ada-002"
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-ada-002")
 
 
 class Pinecone(VectorStore):

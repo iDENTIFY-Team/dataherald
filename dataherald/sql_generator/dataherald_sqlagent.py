@@ -55,7 +55,8 @@ logger = logging.getLogger(__name__)
 
 
 TOP_K = int(os.getenv("UPPER_LIMIT_QUERY_RETURN_ROWS", "50"))
-EMBEDDING_MODEL = "text-embedding-ada-002"
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL","text-embedding-ada-002")
+EMBEDDING_ENGINE = os.environ.get("EMBEDDING_ENGINE", "openai")
 
 
 def catch_exceptions():  # noqa: C901
@@ -640,6 +641,7 @@ class DataheraldSQLAgent(SQLGenerator):
             db_scan=db_scan,
             embedding=OpenAIEmbeddings(
                 openai_api_key=database_connection.decrypt_api_key(),
+                engine=EMBEDDING_ENGINE,
                 model=EMBEDDING_MODEL,
             ),
         )
