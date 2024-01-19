@@ -66,16 +66,22 @@ You can also self-host the engine locally using Docker. By default the engine us
 cp .env.example .env
 ```
 
-Specifically the following 4 fields must be manually set before the engine is started.
+Specifically the following 5 fields must be manually set before the engine is started.
+
+LLM_MODEL is employed by the engine to generate SQL from natural language. You can use the default model (gpt-4-1106-preview) or use your own.
 
 ```
 #OpenAI credentials and model 
 OPENAI_API_KEY = 
-LLM_MODEL =      
+LLM_MODEL = 
 ORG_ID =
 
 #Encryption key for storing DB connection data in Mongo
 ENCRYPT_KEY = 
+
+# All of our SQL generation agents are using different tools to generate SQL queries, in order to limit the number of times that agents can
+# use different tools you can set the "AGENT_MAX_ITERATIONS" env variable. By default it is set to 20 iterations.
+
 ```
 
 While not strictly required, we also strongly suggest you change the MONGO username and password fields as well.
@@ -155,7 +161,7 @@ We currently support connections to Postgres, BigQuery, Databricks, Snowflake an
 
 #### Connecting through the API
 
-You can define a DB connection through a call to the following API endpoint `/api/v1/database`. For example 
+You can define a DB connection through a call to the following API endpoint `POST /api/v1/database-connections`. For example:
 
 Example 1. Without a SSH connection
 ```
@@ -220,6 +226,12 @@ You can generate the `connection_uri` parameter in the API call for each of the 
 "connection_uri": awsathena+rest://<aws_access_key_id>:<aws_secret_access_key>@athena.<region_name>.amazonaws.com:443/<schema_name>?s3_staging_dir=<s3_staging_dir>&work_group=primary
 ```
 
+**DuckDB**
+To connect to DuckDB you should first host your database in MotherDuck and fetch your authentication token.
+```
+"connection_uri": duckdb:///md:<database_name>?motherduck_token=<your_token>
+```
+
 **BigQuery**
 To connect to BigQuery you should create a json credential file. Please follow Steps 1-3 under "Configure 
 BigQuery Authentication in Google Cloud Platform" in 
@@ -251,7 +263,9 @@ Once you have connected to the data warehouse, you should add context to the eng
 While only the Database scan part is required to start generating SQL, adding verified SQL and string descriptions are also important for the tool to generate accurate SQL. 
 
 #### Scanning the Database
-The database scan is used to gather information about the database including table and column names and identifying low cardinality columns and their values to be stored in the context store and used in the prompts to the LLM. You can trigger a scan of a database from the `POST /api/v1/table-descriptions/sync-schemas` endpoint. Example below
+The database scan is used to gather information about the database including table and column names and identifying low cardinality columns and their values to be stored in the context store and used in the prompts to the LLM.
+In addition, it retrieves logs, which consist of historical queries associated with each database table. These records are then stored within the query_history collection. The historical queries retrieved encompass data from the past three months and are grouped based on query and user.
+You can trigger a scan of a database from the `POST /api/v1/table-descriptions/sync-schemas` endpoint. Example below
 
 
 ```
@@ -266,6 +280,29 @@ curl -X 'POST' \
 ```
 
 Since the endpoint identifies low cardinality columns (and their values) it can take time to complete. Therefore while it is possible to trigger a scan on the entire DB by not specifying the `table_names`, we recommend against it for large databases. 
+
+#### Get logs per db connection
+Once a database was scanned you can use this endpoint to retrieve the tables logs
+
+```
+curl -X 'GET' \
+  'http://localhost/api/v1/query-history?db_connection_id=656e52cb4d1fda50cae7b939' \
+  -H 'accept: application/json'
+```
+
+Response example:
+```
+[
+  {
+    "id": "656e52cb4d1fda50cae7b939",
+    "db_connection_id": "656e52cb4d1fda50cae7b939",
+    "table_name": "table_name",
+    "query": "select QUERY_TEXT, USER_NAME, count(*) as occurrences from ....",
+    "user": "user_name",
+    "occurrences": 1
+  }
+]
+```
 
 #### Get a scanned db
 Once a database was scanned you can use this endpoint to retrieve the tables names and columns
@@ -295,7 +332,8 @@ curl -X 'POST' \
 ```
 
 #### Adding string descriptions
-In addition to database table_info and golden_sql, you can add strings describing tables and/or columns to the context store manually from the `PATCH /api/v1/table-descriptions/{table_description_id}` endpoint
+In addition to database table_info and golden_sql, you can set descriptions or update the columns per table and column. 
+All request body fields are optional, and only the fields that are explicitly set will be used to update the resource.
 
 ```
 curl -X 'PATCH' \
@@ -303,23 +341,37 @@ curl -X 'PATCH' \
   -H 'accept: application/json' \
   -H 'Content-Type: application/json' \
   -d '{
-  "description": "Tabla description",
+  "description": "Table description",
   "columns": [
     {
       "name": "column1",
-      "description": "Column1 description"
+      "description": "string",
+      "is_primary_key": false,
+      "data_type": "string",
+      "low_cardinality": true,
+      "categories": [
+        "string"
+      ],
+      "foreign_key": false
     },
     {
       "name": "column2",
-      "description": "Column2 description"
+      "description": "string",
+      "is_primary_key": false,
+      "data_type": "string",
+      "low_cardinality": true,
+      "categories": [
+        "string"
+      ],
+      "foreign_key": false
     }
   ]
 }'
 ```
 
-#### adding database level instructions
+#### Adding database level instructions
 
-You can add database level instructions to the context store manually from the `POST /api/v1/instructions` endpoint
+You can add database level instructions to the context store manually from the `POST /api/v1/instructions` endpoint.
 These instructions are passed directly to the engine and can be used to steer the engine to generate SQL that is more in line with your business logic.
 
 ```
@@ -333,7 +385,7 @@ curl -X 'POST' \
 }'
 ```
 
-#### getting database level instructions
+#### Getting database level instructions
 
 You can get database level instructions from the `GET /api/v1/instructions` endpoint
 
@@ -343,7 +395,7 @@ curl -X 'GET' \
   -H 'accept: application/json'
 ```
 
-#### deleting database level instructions
+#### Deleting database level instructions
 
 You can delete database level instructions from the `DELETE /api/v1/instructions/{instruction_id}` endpoint
 
@@ -353,7 +405,7 @@ curl -X 'DELETE' \
   -H 'accept: application/json'
 ```
 
-#### updating database level instructions
+#### Updating database level instructions
 
 You can update database level instructions from the `PUT /api/v1/instructions/{instruction_id}` endpoint
 Try different instructions to see how the engine generates SQL
@@ -381,6 +433,38 @@ curl -X 'POST' \
         "question": "Your question in natural language",
         "db_connection_id": "db_connection_id"
     }'
+```
+
+### Create new response based on a previously created question
+After utilizing the `questions` endpoint, you have the option to generate a new response associated with a specific question_id. 
+You can modify the `sql_query` to produce an alternative `sql_query_result` and a distinct response. In the event that you do not 
+specify a `sql_query`, the system will reprocess the question to generate the `sql_query`, execute the `sql_query_result`, and subsequently 
+generate the response.
+
+```
+curl -X 'POST' \
+  '<host>/api/v1/responses?run_evaluator=true&sql_response_only=false&generate_csv=false' \
+  -H 'accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "question_id": "11fa1e419fe93d137536fe99",
+  "sql_query": "select * from sales order by created_at DESC limit 10"
+}'
+```
+
+### Run scripts
+Within the `scripts` folder located inside the `dataherald` directory, you have the ability to upgrade your versions. 
+For instance, if you are currently using version 0.0.3 and wish to switch to version 0.0.4, simply execute the following command:
+
+```
+docker-compose exec app python3 -m dataherald.scripts.migrate_v003_to_v004
+```
+Additionally, we provide a script for managing the Vector Store data. You can delete the existing data and upload all 
+the Golden Records to the 'golden_records' collection in MongoDB. If you are utilizing `Chroma` in-memory storage, it's 
+important to note that data is lost upon container restart. To repopulate the data, execute the following command:
+
+```
+docker-compose exec app python3 -m dataherald.scripts.delete_and_populate_golden_records
 ```
 
 

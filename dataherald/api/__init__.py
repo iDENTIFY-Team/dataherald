@@ -2,14 +2,18 @@ from abc import ABC, abstractmethod
 from typing import List
 
 from fastapi import BackgroundTasks
+from fastapi.responses import FileResponse
 
 from dataherald.api.types import Query
 from dataherald.config import Component
-from dataherald.db_scanner.models.types import TableDescription
+from dataherald.db_scanner.models.types import QueryHistory, TableDescription
 from dataherald.sql_database.models.types import DatabaseConnection, SSHSettings
 from dataherald.types import (
+    CancelFineTuningRequest,
     CreateResponseRequest,
     DatabaseConnectionRequest,
+    Finetuning,
+    FineTuningRequest,
     GoldenRecord,
     GoldenRecordRequest,
     Instruction,
@@ -36,7 +40,25 @@ class API(Component, ABC):
         pass
 
     @abstractmethod
-    def answer_question(self, question_request: QuestionRequest) -> Response:
+    def answer_question(
+        self,
+        run_evaluator: bool = True,
+        generate_csv: bool = False,
+        question_request: QuestionRequest = None,
+    ) -> Response:
+        pass
+
+    @abstractmethod
+    def answer_question_with_timeout(
+        self,
+        run_evaluator: bool = True,
+        generate_csv: bool = False,
+        question_request: QuestionRequest = None,
+    ) -> Response:
+        pass
+
+    @abstractmethod
+    def update_response(self, response_id: str) -> Response:
         pass
 
     @abstractmethod
@@ -94,7 +116,17 @@ class API(Component, ABC):
         pass
 
     @abstractmethod
-    def create_response(self, query_request: CreateResponseRequest) -> Response:
+    def create_response(
+        self,
+        run_evaluator: bool = True,
+        sql_response_only: bool = False,
+        generate_csv: bool = False,
+        query_request: CreateResponseRequest = None,
+    ) -> Response:
+        pass
+
+    @abstractmethod
+    def get_query_history(self, db_connection_id: str) -> list[QueryHistory]:
         pass
 
     @abstractmethod
@@ -103,6 +135,12 @@ class API(Component, ABC):
 
     @abstractmethod
     def get_response(self, response_id: str) -> Response:
+        pass
+
+    @abstractmethod
+    def get_response_file(
+        self, response_id: str, background_tasks: BackgroundTasks
+    ) -> FileResponse:
         pass
 
     @abstractmethod
@@ -135,4 +173,20 @@ class API(Component, ABC):
         instruction_id: str,
         instruction_request: UpdateInstruction,
     ) -> Instruction:
+        pass
+
+    @abstractmethod
+    def create_finetuning_job(
+        self, fine_tuning_request: FineTuningRequest, background_tasks: BackgroundTasks
+    ) -> Finetuning:
+        pass
+
+    @abstractmethod
+    def cancel_finetuning_job(
+        self, cancel_fine_tuning_request: CancelFineTuningRequest
+    ) -> Finetuning:
+        pass
+
+    @abstractmethod
+    def get_finetuning_job(self, finetuning_job_id: str) -> Finetuning:
         pass

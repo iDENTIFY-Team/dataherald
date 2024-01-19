@@ -1,19 +1,23 @@
+import os
 from typing import Any, List
 
 import fastapi
 from fastapi import BackgroundTasks, status
 from fastapi import FastAPI as _FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.routing import APIRoute
 
 import dataherald
 from dataherald.api.types import Query
 from dataherald.config import Settings
-from dataherald.db_scanner.models.types import TableDescription
+from dataherald.db_scanner.models.types import QueryHistory, TableDescription
 from dataherald.sql_database.models.types import DatabaseConnection, SSHSettings
 from dataherald.types import (
+    CancelFineTuningRequest,
     CreateResponseRequest,
     DatabaseConnectionRequest,
+    Finetuning,
+    FineTuningRequest,
     GoldenRecord,
     GoldenRecordRequest,
     Instruction,
@@ -50,6 +54,7 @@ class FastAPI(dataherald.server.Server):
             "/api/v1/database-connections",
             self.create_database_connection,
             methods=["POST"],
+            status_code=201,
             tags=["Database connections"],
         )
 
@@ -71,6 +76,7 @@ class FastAPI(dataherald.server.Server):
             "/api/v1/table-descriptions/sync-schemas",
             self.scan_db,
             methods=["POST"],
+            status_code=201,
             tags=["Table descriptions"],
         )
 
@@ -96,6 +102,13 @@ class FastAPI(dataherald.server.Server):
         )
 
         self.router.add_api_route(
+            "/api/v1/query-history",
+            self.get_query_history,
+            methods=["GET"],
+            tags=["Query history"],
+        )
+
+        self.router.add_api_route(
             "/api/v1/golden-records/{golden_record_id}",
             self.delete_golden_record,
             methods=["DELETE"],
@@ -106,6 +119,7 @@ class FastAPI(dataherald.server.Server):
             "/api/v1/golden-records",
             self.add_golden_records,
             methods=["POST"],
+            status_code=201,
             tags=["Golden records"],
         )
 
@@ -120,6 +134,7 @@ class FastAPI(dataherald.server.Server):
             "/api/v1/questions",
             self.answer_question,
             methods=["POST"],
+            status_code=201,
             tags=["Questions"],
         )
 
@@ -141,6 +156,7 @@ class FastAPI(dataherald.server.Server):
             "/api/v1/responses",
             self.create_response,
             methods=["POST"],
+            status_code=201,
             tags=["Responses"],
         )
 
@@ -159,9 +175,24 @@ class FastAPI(dataherald.server.Server):
         )
 
         self.router.add_api_route(
+            "/api/v1/responses/{response_id}/file",
+            self.get_response_file,
+            methods=["GET"],
+            tags=["Responses"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/responses/{response_id}",
+            self.update_response,
+            methods=["PATCH"],
+            tags=["Responses"],
+        )
+
+        self.router.add_api_route(
             "/api/v1/sql-query-executions",
             self.execute_sql_query,
             methods=["POST"],
+            status_code=201,
             tags=["SQL queries"],
         )
 
@@ -169,6 +200,7 @@ class FastAPI(dataherald.server.Server):
             "/api/v1/instructions",
             self.add_instruction,
             methods=["POST"],
+            status_code=201,
             tags=["Instructions"],
         )
 
@@ -194,6 +226,28 @@ class FastAPI(dataherald.server.Server):
         )
 
         self.router.add_api_route(
+            "/api/v1/finetunings",
+            self.create_finetuning_job,
+            methods=["POST"],
+            status_code=201,
+            tags=["Finetunings"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/finetunings/{finetuning_id}",
+            self.get_finetuning_job,
+            methods=["GET"],
+            tags=["Finetunings"],
+        )
+
+        self.router.add_api_route(
+            "/api/v1/finetunings/{finetuning_id}/cancel",
+            self.cancel_finetuning_job,
+            methods=["POST"],
+            tags=["Finetunings"],
+        )
+
+        self.router.add_api_route(
             "/api/v1/heartbeat", self.heartbeat, methods=["GET"], tags=["System"]
         )
 
@@ -208,8 +262,17 @@ class FastAPI(dataherald.server.Server):
     ) -> bool:
         return self._api.scan_db(scanner_request, background_tasks)
 
-    def answer_question(self, question_request: QuestionRequest) -> Response:
-        return self._api.answer_question(question_request)
+    def answer_question(
+        self,
+        run_evaluator: bool = True,
+        generate_csv: bool = False,
+        question_request: QuestionRequest = None,
+    ) -> Response:
+        if os.getenv("DH_ENGINE_TIMEOUT", None):
+            return self._api.answer_question_with_timeout(
+                run_evaluator, generate_csv, question_request
+            )
+        return self._api.answer_question(run_evaluator, generate_csv, question_request)
 
     def get_questions(self, db_connection_id: str | None = None) -> list[Question]:
         return self._api.get_questions(db_connection_id)
@@ -264,6 +327,10 @@ class FastAPI(dataherald.server.Server):
         """Get description"""
         return self._api.get_table_description(table_description_id)
 
+    def get_query_history(self, db_connection_id: str) -> list[QueryHistory]:
+        """Get description"""
+        return self._api.get_query_history(db_connection_id)
+
     def get_responses(self, question_id: str | None = None) -> list[Response]:
         """List responses"""
         return self._api.get_responses(question_id)
@@ -272,13 +339,31 @@ class FastAPI(dataherald.server.Server):
         """Get a response"""
         return self._api.get_response(response_id)
 
+    def update_response(self, response_id: str) -> Response:
+        """Update a response"""
+        return self._api.update_response(response_id)
+
+    def get_response_file(
+        self, response_id: str, background_tasks: BackgroundTasks
+    ) -> FileResponse:
+        """Get a response file"""
+        return self._api.get_response_file(response_id, background_tasks)
+
     def execute_sql_query(self, query: Query) -> tuple[str, dict]:
         """Executes a query on the given db_connection_id"""
         return self._api.execute_sql_query(query)
 
-    def create_response(self, query_request: CreateResponseRequest) -> Response:
+    def create_response(
+        self,
+        run_evaluator: bool = True,
+        sql_response_only: bool = False,
+        generate_csv: bool = False,
+        query_request: CreateResponseRequest = None,
+    ) -> Response:
         """Executes a query on the given db_connection_id"""
-        return self._api.create_response(query_request)
+        return self._api.create_response(
+            run_evaluator, sql_response_only, generate_csv, query_request
+        )
 
     def delete_golden_record(self, golden_record_id: str) -> dict:
         """Deletes a golden record"""
@@ -330,3 +415,19 @@ class FastAPI(dataherald.server.Server):
     ) -> Instruction:
         """Updates an instruction"""
         return self._api.update_instruction(instruction_id, instruction_request)
+
+    def create_finetuning_job(
+        self, fine_tuning_request: FineTuningRequest, background_tasks: BackgroundTasks
+    ) -> Finetuning:
+        """Creates a fine tuning job"""
+        return self._api.create_finetuning_job(fine_tuning_request, background_tasks)
+
+    def cancel_finetuning_job(
+        self, cancel_fine_tuning_request: CancelFineTuningRequest
+    ) -> Finetuning:
+        """Cancels a fine tuning job"""
+        return self._api.cancel_finetuning_job(cancel_fine_tuning_request)
+
+    def get_finetuning_job(self, finetuning_job_id: str) -> Finetuning:
+        """Gets fine tuning jobs"""
+        return self._api.get_finetuning_job(finetuning_job_id)

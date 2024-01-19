@@ -62,6 +62,9 @@ class SQLDatabase(LangchainSQLDatabase):
     ) -> "SQLDatabase":
         """Construct a SQLAlchemy engine from URI."""
         _engine_args = engine_args or {}
+        if database_uri.lower().startswith("duckdb"):
+            config = {"autoload_known_extensions": False}
+            _engine_args["connect_args"] = {"config": config}
         engine = create_engine(database_uri, **_engine_args)
         return cls(engine, **kwargs)
 
@@ -152,7 +155,7 @@ class SQLDatabase(LangchainSQLDatabase):
 
         return command
 
-    def run_sql(self, command: str) -> tuple[str, dict]:
+    def run_sql(self, command: str, top_k: int = None) -> tuple[str, dict]:
         """Execute a SQL statement and return a string representing the results.
 
         If the statement returns rows, a string of the results is returned.
@@ -161,6 +164,9 @@ class SQLDatabase(LangchainSQLDatabase):
         with self._engine.connect() as connection:
             command = self.parser_to_filter_commands(command)
             cursor = connection.execute(text(command))
+            if cursor.returns_rows and top_k:
+                result = cursor.fetchmany(top_k)
+                return str(result), {"result": result}
             if cursor.returns_rows:
                 result = cursor.fetchall()
                 return str(result), {"result": result}

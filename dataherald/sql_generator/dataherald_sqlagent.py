@@ -1,7 +1,7 @@
 import datetime
 import difflib
 import logging
-import time
+import os
 from functools import wraps
 from typing import Any, Callable, Dict, List
 
@@ -21,10 +21,11 @@ from langchain.callbacks.manager import (
     CallbackManagerForToolRun,
 )
 from langchain.chains.llm import LLMChain
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.schema import AgentAction
 from langchain.tools.base import BaseTool
 from overrides import override
-from pydantic import BaseModel, Extra, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import MetaData
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql import func
@@ -37,57 +38,25 @@ from dataherald.sql_database.base import SQLDatabase, SQLInjectionError
 from dataherald.sql_database.models.types import (
     DatabaseConnection,
 )
-from dataherald.sql_generator import SQLGenerator
+from dataherald.sql_generator import EngineTimeOutORItemLimitError, SQLGenerator
 from dataherald.types import Question, Response
+from dataherald.utils.agent_prompts import (
+    AGENT_PREFIX,
+    FORMAT_INSTRUCTIONS,
+    PLAN_BASE,
+    PLAN_WITH_FEWSHOT_EXAMPLES,
+    PLAN_WITH_FEWSHOT_EXAMPLES_AND_INSTRUCTIONS,
+    PLAN_WITH_INSTRUCTIONS,
+    SUFFIX_WITH_FEW_SHOT_SAMPLES,
+    SUFFIX_WITHOUT_FEW_SHOT_SAMPLES,
+)
 
 logger = logging.getLogger(__name__)
 
 
-AGENT_PREFIX = """You are an agent designed to interact with a SQL database.
-Given an input question, create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
-Unless the user specifies a specific number of examples they wish to obtain, always limit your query to at most {top_k} results.
-You have access to tools for interacting with the database.
-Only use the below tools. Only use the information returned by the below tools to construct your final answer.
-#
-Here is the plan you have to follow:
-1) Use the fewshot_examples_retriever tool to retrieve a first set of possibly relevant tables and columns and the SQL syntax to use.
-2) Use the db_tables_with_relevance_scores tool to find the a second set of possibly relevant tables.
-3) Use the db_relevant_tables_schema tool to obtain the schema of the both sets of possibly relevant tables to identify the possibly relevant columns.
-4) Use the db_relevant_columns_info tool to gather more information about the possibly relevant columns, filtering them to find the relevant ones.
-5) [Optional based on the question] Use the get_current_datetime tool if the question has any mentions of time or dates.
-6) [Optional based on the question] Always use the db_column_entity_checker tool to make sure that relevant columns have the cell-values.
-7) Use the get_admin_instructions tool to retrieve the DB admin instructions before generating the SQL query.
-8) Write a {dialect} query and use sql_db_query tool the Execute the SQL query on the database to obtain the results.
-#
-Some tips to always keep in mind:
-tip1) For complex questions that has many relevant columns and tables request for more examples of Question/SQL pairs.
-tip2) The maximum number of Question/SQL pairs you can request is {max_examples}.
-tip3) If the SQL query resulted in errors, rewrite the SQL query and try again.
-tip4) If you are still unsure about which columns and tables to use, ask for more Question/SQL pairs.
-tip5) The Question/SQL pairs are labelled as correct pairs, so you can use them to learn how to construct the SQL query.
-#
-Always use the get_current_datetime tool if there is any time or date in the given question.
-If the question does not seem related to the database, just return "I don't know" as the answer.
-If the there is a very similar question among the fewshot examples, modify the SQL query to fit the given question and return the answer.
-The SQL query MUST have in-line comments to explain what each clause does.
-"""  # noqa: E501
-
-FORMAT_INSTRUCTIONS = """Use the following format:
-
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question"""
-
-AGENT_SUFFIX = """Begin!
-
-Question: {input}
-Thought: I should Collect examples of Question/SQL pairs to identify possibly relevant tables, columns, and SQL query styles. If there is a similar question among the examples, I can use the SQL query from the example and modify it to fit the given question.
-{agent_scratchpad}"""  # noqa: E501
+TOP_K = int(os.getenv("UPPER_LIMIT_QUERY_RETURN_ROWS", "50"))
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL","text-embedding-ada-002")
+EMBEDDING_ENGINE = os.environ.get("EMBEDDING_ENGINE", "openai")
 
 
 def catch_exceptions():  # noqa: C901
@@ -96,23 +65,21 @@ def catch_exceptions():  # noqa: C901
         def wrapper(*args: Any, **kwargs: Any) -> Any:  # noqa: PLR0911
             try:
                 return fn(*args, **kwargs)
-            except openai.error.APIError as e:
+            except openai.AuthenticationError as e:
+                # Handle authentication error here
+                return f"OpenAI API authentication error: {e}"
+            except openai.RateLimitError as e:
                 # Handle API error here, e.g. retry or log
-                return f"OpenAI API returned an API Error: {e}"
-            except openai.error.APIConnectionError as e:
-                # Handle connection error here
-                return f"Failed to connect to OpenAI API: {e}"
-            except openai.error.RateLimitError as e:
-                # Handle rate limit error (we recommend using exponential backoff)
                 return f"OpenAI API request exceeded rate limit: {e}"
-            except openai.error.Timeout as e:
-                # Handle timeout error (we recommend using exponential backoff)
+            except openai.BadRequestError as e:
+                # Handle connection error here
                 return f"OpenAI API request timed out: {e}"
-            except openai.error.ServiceUnavailableError as e:
-                # Handle service unavailable error (we recommend using exponential backoff)
-                return f"OpenAI API service unavailable: {e}"
-            except openai.error.InvalidRequestError as e:
-                return f"OpenAI API request was invalid: {e}"
+            except openai.APIResponseValidationError as e:
+                # Handle rate limit error (we recommend using exponential backoff)
+                return f"OpenAI API response is invalid: {e}"
+            except openai.OpenAIError as e:
+                # Handle timeout error (we recommend using exponential backoff)
+                return f"OpenAI API returned an error: {e}"
             except GoogleAPIError as e:
                 return f"Google API returned an error: {e}"
             except SQLAlchemyError as e:
@@ -134,13 +101,13 @@ class BaseSQLDatabaseTool(BaseModel):
         """Configuration for this pydantic object."""
 
         arbitrary_types_allowed = True
-        extra = Extra.forbid
+        extra = "allow"
 
 
-class GetCurrentTimeTool(BaseSQLDatabaseTool, BaseTool):
+class SystemTime(BaseSQLDatabaseTool, BaseTool):
     """Tool for finding the current data and time."""
 
-    name = "get_current_datetime"
+    name = "system_time"
     description = """
     Input is an empty string, output is the current data and time.
     Always use this tool before generating a query if there is any time or date in the given question.
@@ -179,10 +146,15 @@ class QuerySQLDataBaseTool(BaseSQLDatabaseTool, BaseTool):
     def _run(
         self,
         query: str,
+        top_k: int = TOP_K,
         run_manager: CallbackManagerForToolRun | None = None,  # noqa: ARG002
     ) -> str:
         """Execute the query, return the results or an error message."""
-        return self.db.run_sql(query)[0]
+        if "```sql" in query:
+            logger.info("**** Removing markdown formatting from the query\n")
+            query = query.replace("```sql", "").replace("```", "")
+            logger.info(f"**** Query after removing markdown formatting: {query}\n")
+        return self.db.run_sql(query, top_k=top_k)[0]
 
     async def _arun(
         self,
@@ -232,14 +204,14 @@ class TablesSQLDatabaseTool(BaseSQLDatabaseTool, BaseTool):
     Use this tool to identify the relevant tables for the given question.
     """
     db_scan: List[TableDescription]
+    embedding: OpenAIEmbeddings
 
     def get_embedding(
-        self, text: str, model: str = "text-embedding-ada-002"
+        self,
+        text: str,
     ) -> List[float]:
         text = text.replace("\n", " ")
-        return openai.Embedding.create(input=[text], model=model)["data"][0][
-            "embedding"
-        ]
+        return self.embedding.embed_query(text)
 
     def cosine_similarity(self, a: List[float], b: List[float]) -> float:
         return round(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)), 4)
@@ -495,6 +467,7 @@ class SQLDatabaseToolkit(BaseToolkit):
     few_shot_examples: List[dict] | None = Field(exclude=True, default=None)
     instructions: List[dict] | None = Field(exclude=True, default=None)
     db_scan: List[TableDescription] = Field(exclude=True)
+    embedding: OpenAIEmbeddings = Field(exclude=True)
 
     @property
     def dialect(self) -> str:
@@ -517,10 +490,13 @@ class SQLDatabaseToolkit(BaseToolkit):
                     db=self.db, context=self.context, instructions=self.instructions
                 )
             )
-        get_current_datetime = GetCurrentTimeTool(db=self.db, context=self.context)
+        get_current_datetime = SystemTime(db=self.db, context=self.context)
         tools.append(get_current_datetime)
         tables_sql_db_tool = TablesSQLDatabaseTool(
-            db=self.db, context=self.context, db_scan=self.db_scan
+            db=self.db,
+            context=self.context,
+            db_scan=self.db_scan,
+            embedding=self.embedding,
         )
         tools.append(tables_sql_db_tool)
         schema_sql_db_tool = SchemaSQLDatabaseTool(
@@ -546,7 +522,7 @@ class SQLDatabaseToolkit(BaseToolkit):
 class DataheraldSQLAgent(SQLGenerator):
     """Dataherald SQL agent"""
 
-    max_number_of_examples: int = 100  # maximum number of question/SQL pairs
+    max_number_of_examples: int = 5  # maximum number of question/SQL pairs
     llm: Any = None
 
     def remove_duplicate_examples(self, fewshot_exmaples: List[dict]) -> List[dict]:
@@ -567,8 +543,9 @@ class DataheraldSQLAgent(SQLGenerator):
         format_instructions: str = FORMAT_INSTRUCTIONS,
         input_variables: List[str] | None = None,
         max_examples: int = 20,
-        top_k: int = 100,
-        max_iterations: int | None = 15,
+        number_of_instructions: int = 1,
+        max_iterations: int
+        | None = int(os.getenv("AGENT_MAX_ITERATIONS", "20")),  # noqa: B008
         max_execution_time: float | None = None,
         early_stopping_method: str = "force",
         verbose: bool = False,
@@ -577,13 +554,29 @@ class DataheraldSQLAgent(SQLGenerator):
     ) -> AgentExecutor:
         """Construct an SQL agent from an LLM and tools."""
         tools = toolkit.get_tools()
+        if max_examples > 0 and number_of_instructions > 0:
+            plan = PLAN_WITH_FEWSHOT_EXAMPLES_AND_INSTRUCTIONS
+            suffix = SUFFIX_WITH_FEW_SHOT_SAMPLES
+        elif max_examples > 0:
+            plan = PLAN_WITH_FEWSHOT_EXAMPLES
+            suffix = SUFFIX_WITH_FEW_SHOT_SAMPLES
+        elif number_of_instructions > 0:
+            plan = PLAN_WITH_INSTRUCTIONS
+            suffix = SUFFIX_WITHOUT_FEW_SHOT_SAMPLES
+        else:
+            plan = PLAN_BASE
+            suffix = SUFFIX_WITHOUT_FEW_SHOT_SAMPLES
+        plan = plan.format(
+            dialect=toolkit.dialect,
+            max_examples=max_examples,
+        )
         prefix = prefix.format(
-            dialect=toolkit.dialect, top_k=top_k, max_examples=max_examples
+            dialect=toolkit.dialect, max_examples=max_examples, agent_plan=plan
         )
         prompt = ZeroShotAgent.create_prompt(
             tools,
             prefix=prefix,
-            suffix=suffix or AGENT_SUFFIX,
+            suffix=suffix,
             format_instructions=format_instructions,
             input_variables=input_variables,
         )
@@ -611,13 +604,14 @@ class DataheraldSQLAgent(SQLGenerator):
         user_question: Question,
         database_connection: DatabaseConnection,
         context: List[dict] = None,
+        generate_csv: bool = False,
     ) -> Response:
-        start_time = time.time()
         context_store = self.system.instance(ContextStore)
         storage = self.system.instance(DB)
         self.llm = self.model.get_model(
             database_connection=database_connection,
             temperature=0,
+            model_name=os.getenv("LLM_MODEL", "gpt-4-1106-preview"),
         )
         repository = TableDescriptionRepository(storage)
         db_scan = repository.get_all_tables_by_db(
@@ -645,19 +639,29 @@ class DataheraldSQLAgent(SQLGenerator):
             few_shot_examples=new_fewshot_examples,
             instructions=instructions,
             db_scan=db_scan,
+            embedding=OpenAIEmbeddings(
+                openai_api_key=database_connection.decrypt_api_key(),
+                engine=EMBEDDING_ENGINE,
+                model=EMBEDDING_MODEL,
+            ),
         )
         agent_executor = self.create_sql_agent(
             toolkit=toolkit,
             verbose=True,
             max_examples=number_of_samples,
+            number_of_instructions=len(instructions) if instructions is not None else 0,
+            max_execution_time=os.getenv("DH_ENGINE_TIMEOUT", None),
         )
         agent_executor.return_intermediate_steps = True
         agent_executor.handle_parsing_errors = True
         with get_openai_callback() as cb:
             try:
                 result = agent_executor({"input": user_question.question})
+                result = self.check_for_time_out_or_tool_limit(result)
             except SQLInjectionError as e:
-                raise SQLAlchemyError(e) from e
+                raise SQLInjectionError(e) from e
+            except EngineTimeOutORItemLimitError as e:
+                raise EngineTimeOutORItemLimitError(e) from e
             except Exception as e:
                 return Response(
                     question_id=user_question.id,
@@ -672,21 +676,31 @@ class DataheraldSQLAgent(SQLGenerator):
         for step in result["intermediate_steps"]:
             action = step[0]
             if type(action) == AgentAction and action.tool == "sql_db_query":
-                sql_query_list.append(self.format_sql_query(action.tool_input))
+                query = self.format_sql_query(action.tool_input)
+                if "```sql" in query:
+                    logger.info("**** Removing markdown formatting from the query\n")
+                    query = query.replace("```sql", "").replace("```", "")
+                    logger.info(
+                        f"**** Query after removing markdown formatting: {query}\n"
+                    )
+                sql_query_list.append(query)
         intermediate_steps = self.format_intermediate_representations(
             result["intermediate_steps"]
         )
-        exec_time = time.time() - start_time
-        logger.info(
-            f"cost: {str(cb.total_cost)} tokens: {str(cb.total_tokens)} time: {str(exec_time)}"
-        )
+        logger.info(f"cost: {str(cb.total_cost)} tokens: {str(cb.total_tokens)}")
         response = Response(
             question_id=user_question.id,
             response=result["output"],
             intermediate_steps=intermediate_steps,
-            exec_time=exec_time,
             total_tokens=cb.total_tokens,
             total_cost=cb.total_cost,
             sql_query=sql_query_list[-1] if len(sql_query_list) > 0 else "",
         )
-        return self.create_sql_query_status(self.database, response.sql_query, response)
+        return self.create_sql_query_status(
+            self.database,
+            response.sql_query,
+            response,
+            top_k=TOP_K,
+            generate_csv=generate_csv,
+            database_connection=database_connection,
+        )

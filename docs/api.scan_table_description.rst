@@ -1,10 +1,13 @@
 .. api.scan_database:
 
-Scan a Database
+Create a table description
 =======================
 
 Once you have set your db credentials request this endpoint to scan your database. It maps
-all tables and columns so It will help the SQL Agent to generate an accurate answer.
+all tables and columns so It will help the SQL Agent to generate an accurate answer. In addition, it retrieves logs,
+which consist of historical queries associated with each database table. These records are then stored within the
+query_history collection. The historical queries retrieved encompass data from the past three months and are grouped
+based on query and user.
 
 It can scan all db tables or if you specify a `table_names` then It will only scan those tables.
 
@@ -25,7 +28,7 @@ Request this ``POST`` endpoint::
 
 **Responses**
 
-HTTP 200 code response
+HTTP 201 code response
 
 .. code-block:: rst
 

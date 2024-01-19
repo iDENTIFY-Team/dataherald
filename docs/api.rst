@@ -19,8 +19,9 @@ Related endpoints are:
 
 * :doc:`Create database connection <api.create_database_connection>` -- ``POST api/v1/database-connections``
 * :doc:`List database connections <api.list_database_connections>` -- ``GET api/v1/database-connections``
-* :doc:`Update a database connection <api.update_database_connection>` -- ``PUT api/v1/database-connections/{alias}`` 
+* :doc:`Update a database connection <api.update_database_connection>` -- ``PUT api/v1/database-connections/{db_connection_id}``
 
+**Database connection resource example:**
 
 .. code-block:: json
 
@@ -29,6 +30,7 @@ Related endpoints are:
         "use_ssh": false,
         "connection_uri": "string",
         "path_to_credentials_file": "string",
+        "llm_api_key": "string",
         "ssh_settings": {
             "db_name": "string",
             "host": "string",
@@ -42,31 +44,45 @@ Related endpoints are:
         }
     }
 
-
-Query Response
+Responses
 ------------------
-The ``query-response`` object is created from the answering natural language questions from the relational data.
+The ``responses`` object is created from the answering natural language questions from the relational data.
 
 The related endpoints are:
 
-* :doc:`process_nl_query_response <api.process_nl_query_response>` -- ``POST api/v1/responses``
+* :doc:`add_question <api.question>` -- ``POST api/v1/questions``
+* :doc:`add_responses <api.add_responses>` -- ``POST api/v1/responses``
+* :doc:`list_responses <api.list_responses>` -- ``GET api/v1/responses``
+* :doc:`get_response <api.get_response>` -- ``GET api/v1/responses/{response_id}``
+* :doc:`get_response_file <api.get_response_file>` -- ``GET api/v1/responses/{response_id}/file``
+
+**Response resource example:**
 
 .. code-block:: json
 
     {
-        "confidence_score": "string",
-        "error_message": "string",
-        "exec_time": "float",
-        "intermediate_steps":["string"],
-        "question_id": "string",
-        "response": "string",
-        "sql_generation_status": "string",
-        "sql_query": "string",
-        "sql_query_result": {},
-        "total_cost": "float",
-        "total_tokens": "int"
+      "question_id": "string",
+      "response": "string",
+      "intermediate_steps": [
+        "string"
+      ],
+      "sql_query": "string",
+      "sql_query_result": {
+        "columns": [
+          "string"
+        ],
+        "rows": [
+          {}
+        ]
+      },
+      "sql_generation_status": "INVALID",
+      "error_message": "string",
+      "exec_time": 0,
+      "total_tokens": 0,
+      "total_cost": 0,
+      "confidence_score": 0,
+      "created_at": "2023-10-12T16:26:40.951158"
     }
-
 
 Table Descriptions
 ---------------------
@@ -76,8 +92,11 @@ These are then used to help the LLM build valid SQL to answer natural language q
 Related endpoints are:
 
 * :doc:`Scan table description <api.scan_table_description>` -- ``POST api/v1/table-descriptions/sync-schemas``
-* :doc:`Add table description <api.add_descriptions>` -- ``PATCH api/v1/table-descriptions/{table_description_id}``
+* :doc:`Update a table description <api.update_table_descriptions>` -- ``PATCH api/v1/table-descriptions/{table_description_id}``
 * :doc:`List table description <api.list_table_description>` -- ``GET api/v1/table-descriptions``
+* :doc:`Get a description <api.get_table_description>` -- ``GET api/v1/table-descriptions/{table_description_id}``
+
+**Table description resource example:**
 
 .. code-block:: json
 
@@ -102,6 +121,8 @@ Related endpoints are:
 * :doc:`Update database instructions <api.update_instructions>` -- ``PUT api/v1/{db_connection_id}/instructions/{instruction_id}``
 * :doc:`Delete database instructions <api.delete_instructions>` -- ``DELETE api/v1/{db_connection_id}/instructions/{instruction_id}``
 
+**Instruction resource example:**
+
 .. code-block:: json
 
     {
@@ -109,6 +130,44 @@ Related endpoints are:
         "instruction": "string",
     }
 
+Finetuning jobs
+---------------------
+The ``finetuning`` object is used to finetune the LLM to your data. This is an asynchronous process that uploads your golden records to model provider servers and creates a finetuning job.
+The finetuned model is going to be used inside an agent for generating SQL queries.
+
+Related endpoints are:
+
+* :doc:`Finetuning job create <api.finetuning>` -- ``POST api/v1/finetunings``
+* :doc:`Finetuning job get <api.get_finetuning>` -- ``GET api/v1/finetunings/{finetuning_id}``
+* :doc:`Finetuning job cancel <api.cancel_finetuning>` -- ``POST api/v1/finetunings/{finetuning_id}/cancel``
+
+
+**Finetuning resource example:**
+
+.. code-block:: json
+
+    {
+        "id": "finetuing-job-id",
+        "db_connection_id": "database_connection_id",
+        "alias": "model name",
+        "status": "finetuning_job_status", // Possible values: queued, running, succeeded, validating_files, failed, or cancelled
+        "error": "The error message if the job failed", // Optional, default is None
+        "base_llm": {
+            "model_provider": "model_provider_name", // Currently, only 'openai'
+            "model_name": "model_name", // Supported: gpt-3.5-turbo, gpt-4
+            "model_parameters": {
+                "n_epochs": "int or string", // Optional, default 3
+                "batch_size": "int or string", // Optional, default 1
+                "learning_rate_multiplier": "int or string" // Optional, default "auto"
+            }
+        },
+        "finetuning_file_id": "File ID for finetuning file",
+        "finetuning_job_id": "Finetuning job ID",
+        "model_id": "Model ID after finetuning",
+        "created_at": "datetime",
+        "golden_records": "array[ids]", // Default is None, meaning use all golden records
+        "metadata": "dict[str, str] | None" // Optional, default None
+    }
 
 .. toctree::
     :hidden:
@@ -118,8 +177,10 @@ Related endpoints are:
     api.update_database_connection
 
     api.scan_table_description
-    api.add_descriptions
     api.list_table_description
+    api.get_table_description
+    api.update_table_descriptions
+    api.list_query_history
 
     api.add_instructions
     api.list_instructions
@@ -129,5 +190,14 @@ Related endpoints are:
     api.golden_record
 
     api.question
+    api.list_questions
+    api.get_question
 
-    api.process_nl_query_response
+    api.add_responses
+    api.list_responses
+    api.get_response
+    api.get_response_file
+
+    api.finetuning
+    api.get_finetuning
+    api.cancel_finetuning

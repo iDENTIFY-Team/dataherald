@@ -1,6 +1,7 @@
 """A wrapper for the SQL generation functions in langchain"""
 
 import logging
+import os
 import time
 from typing import Any, List
 
@@ -46,10 +47,13 @@ class LangChainSQLChainSQLGenerator(SQLGenerator):
         user_question: Question,
         database_connection: DatabaseConnection,
         context: List[dict] = None,
+        generate_csv: bool = False,
     ) -> Response:
         start_time = time.time()
         self.llm = self.model.get_model(
-            database_connection=database_connection, temperature=0
+            database_connection=database_connection,
+            temperature=0,
+            model_name=os.getenv("LLM_MODEL", "gpt-4-1106-preview"),
         )
         self.database = SQLDatabase.get_sql_engine(database_connection)
         logger.info(
@@ -91,4 +95,10 @@ class LangChainSQLChainSQLGenerator(SQLGenerator):
             total_tokens=cb.total_tokens,
             sql_query=self.format_sql_query(result["intermediate_steps"][1]),
         )
-        return self.create_sql_query_status(self.database, response.sql_query, response)
+        return self.create_sql_query_status(
+            self.database,
+            response.sql_query,
+            response,
+            generate_csv=generate_csv,
+            database_connection=database_connection,
+        )
