@@ -38,7 +38,7 @@ class BaseModel(LLMModel):
         if self.openai_api_key:
             if model_family == "openai":
                 self.model = OpenAI(model_name=model_name, **kwargs)
-             elif model_family == "azure":
+            elif model_family == "azure":
                 self.model = AzureOpenAI(deployment_name=self.deployment_name, model_name=model_name, **kwargs)
         elif self.aleph_alpha_api_key:
             self.model = AlephAlpha(model=model_name, **kwargs)
